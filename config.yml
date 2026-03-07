@@ -1,3 +1,4 @@
+EMAIL_TO: trelakrystian@gmail.com
 SMTP_HOST: poczta.interia.pl
 SMTP_PORT: 465
 watches:

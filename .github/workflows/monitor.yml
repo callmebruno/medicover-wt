@@ -49,8 +49,5 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
 
-          # Adres email odbiorcy — GitHub Secret (nigdy nie commituj!)
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
-
-          # Pozostałe parametry (REGION_ID, SPECIALIZATION_ID itp.)
+          # Pozostałe parametry (REGION_ID, SPECIALIZATION_ID, EMAIL_TO itp.)
           # są wczytywane automatycznie z pliku config.yml w repozytorium.

@@ -413,22 +413,18 @@ def _slot_val(slot: dict, *keys: str) -> str:
     return "?"
 
 
-_GH_REDIRECT = "https://callmebruno.github.io/medicover/r"
-
-
 def _slot_booking_url(slot: dict, watch: dict | None = None) -> str:
-    """Return a GitHub Pages redirect URL that opens Medicover search results.
+    """Return search results URL for a slot (pre-filled with date, region, specialty).
 
-    Routing through a different domain prevents the Medicover Android app from
-    intercepting the link, so it opens in the browser instead.
+    Format: /appointments/search/results?date=...&regionId=...&specialtyIds=...
     """
-    appt_date      = slot.get("appointmentDate", "")
-    region_id      = (watch or {}).get("region_id", "")
-    specialization = (watch or {}).get("specialization_id", "")
+    appt_date        = slot.get("appointmentDate", "")
+    region_id        = (watch or {}).get("region_id", "")
+    specialization   = (watch or {}).get("specialization_id", "")
 
     if appt_date and region_id and specialization:
         date_only = str(appt_date)[:10]
-        medicover_url = (
+        url = (
             f"https://online24.medicover.pl/appointments/search/results"
             f"?date={date_only}"
             f"&regionId={region_id}"
@@ -437,7 +433,7 @@ def _slot_booking_url(slot: dict, watch: dict | None = None) -> str:
             f"&source=direct"
             f"&isOverbookingSearchDisabled=false"
         )
-        return f"{_GH_REDIRECT}?u={quote(medicover_url, safe='')}"
+        return url
 
     return "https://online24.medicover.pl"
 
