@@ -25,10 +25,27 @@ watches:
   booking_type: 1
   days_ahead: 30
   time_from: '17:00'
-- name: Medicover Express - przeziębienie, grypa – Kraków
+- name: Dermatolog dorośli – Kraków
   region_id: 202
-  specialization_id: 16234
-  clinic_id: -1
+  specialization_id: 3
+  clinic_id: 13038
   doctor_id: -1
   booking_type: 1
   days_ahead: 30
+  time_from: '17:00'
+- name: Internista – Kraków
+  region_id: 202
+  specialization_id: 9
+  clinic_id: 13038
+  doctor_id: -1
+  booking_type: 1
+  days_ahead: 30
+  time_from: '17:00'
+- name: Stomatolog - leczenie – Kraków
+  region_id: 202
+  specialization_id: 23504
+  clinic_id: 59886
+  doctor_id: 333458
+  booking_type: 1
+  days_ahead: 90
+  email_to: p.iwonastolarz@gmail.com
