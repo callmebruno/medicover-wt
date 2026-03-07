@@ -2,13 +2,6 @@ EMAIL_TO: trelakrystian@gmail.com
 SMTP_HOST: poczta.interia.pl
 SMTP_PORT: 465
 watches:
-- name: Urolog dorośli – Kraków
-  region_id: 202
-  specialization_id: 30
-  clinic_id: -1
-  doctor_id: -1
-  booking_type: 1
-  days_ahead: 30
 - name: Stomatolog - przegląd – Kraków
   region_id: 202
   specialization_id: 22890
