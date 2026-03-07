@@ -1,0 +1,56 @@
+name: Medicover Monitor
+
+on:
+  # schedule:
+  #- cron: '*/5 * * * *'
+  workflow_dispatch:
+    # Umożliwia ręczne uruchomienie z poziomu zakładki Actions
+
+jobs:
+  check-appointments:
+    name: Sprawdź wolne terminy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # potrzebne do commitu notified.json
+
+    steps:
+      - name: Pobierz kod
+        uses: actions/checkout@v4
+
+      - name: Ustaw Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Zainstaluj zależności
+        run: pip install -r requirements.txt
+
+      - name: Skonfiguruj git (do zapisu notified.json)
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/callmebruno/medicover.git
+
+      - name: Dodaj Medicover do /etc/hosts (bypass GeoDNS)
+        run: |
+          echo "13.37.145.162 login-online24.medicover.pl" | sudo tee -a /etc/hosts
+          echo "18.153.162.82 api-gateway-online24.medicover.pl" | sudo tee -a /etc/hosts
+          echo "18.153.162.82 online24.medicover.pl" | sudo tee -a /etc/hosts
+
+      - name: Sprawdź terminy i wyślij email
+        run: python monitor.py monitor
+        env:
+          # Dane logowania Medicover — GitHub Secrets (nigdy nie commituj!)
+          MEDICOVER_USER: ${{ secrets.MEDICOVER_USER }}
+          MEDICOVER_PASS: ${{ secrets.MEDICOVER_PASS }}
+
+          # Dane SMTP — GitHub Secrets (nigdy nie commituj!)
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+
+          # Adres email odbiorcy — GitHub Secret (nigdy nie commituj!)
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+
+          # Pozostałe parametry (REGION_ID, SPECIALIZATION_ID itp.)
+          # są wczytywane automatycznie z pliku config.yml w repozytorium.

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <title>Medicover – przekierowanie</title>
+  <script>
+    (function () {
+      var u = new URLSearchParams(window.location.search).get('u');
+      if (u && u.startsWith('https://online24.medicover.pl/')) {
+        window.location.replace(u);
+      } else {
+        window.location.replace('https://online24.medicover.pl');
+      }
+    })();
+  </script>
+</head>
+<body>
+  <p style="font-family:sans-serif;text-align:center;margin-top:40px">
+    Przekierowuję do Medicover…
+  </p>
+</body>
+</html>

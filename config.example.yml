@@ -1,0 +1,48 @@
+# ============================================================
+#  Konfiguracja Medicover Monitor
+#  Nie wpisuj tu prawdziwych danych — użyj GitHub Secrets/Variables
+#  lub zmiennych środowiskowych lokalnie (.env).
+# ============================================================
+
+# --------------- Konto Medicover ---------------
+MEDICOVER_USER: "12345678"   # identyfikator Medicover (cyfry, nie email)
+MEDICOVER_PASS: "twoje_haslo"              # hasło do konta Medicover
+
+# --------------- Parametry wyszukiwania ---------------
+# Uruchom `python monitor.py discover` aby poznać dostępne wartości
+
+REGION_ID: 204            # Warszawa = 204 (przykład)
+SPECIALIZATION_ID: 27962  # Endokrynolog = 27962 (przykład)
+CLINIC_ID: -1             # -1 = dowolna placówka
+DOCTOR_ID: -1             # -1 = dowolny lekarz
+
+# Typ wizyty: 1 = stacjonarna, 2 = telefoniczna
+BOOKING_TYPE: 2
+
+# Ile dni naprzód wyszukiwać
+DAYS_AHEAD: 30
+
+# --------------- Powiadomienia email ---------------
+EMAIL_TO: "odbiorca@example.com"   # adres docelowy
+
+# SMTP — przykład dla Interia:
+SMTP_HOST: "poczta.interia.pl"
+SMTP_PORT: 465
+SMTP_USER: "nadawca@interia.pl"
+SMTP_PASS: "twoje_haslo_interia"
+
+# ============================================================
+#  Jak znaleźć REGION_ID, SPECIALIZATION_ID, CLINIC_ID, DOCTOR_ID:
+#
+#  1. Pokaż regiony:
+#       python monitor.py discover
+#
+#  2. Pokaż specjalizacje dla regionu 204:
+#       python monitor.py discover --region 204
+#
+#  3. Pokaż placówki dla regionu + specjalizacji:
+#       python monitor.py discover --region 204 --specialization 27962
+#
+#  4. Pokaż lekarzy dla regionu + specjalizacji + placówki:
+#       python monitor.py discover --region 204 --specialization 27962 --clinic 174
+# ============================================================
