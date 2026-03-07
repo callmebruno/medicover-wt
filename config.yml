@@ -53,7 +53,7 @@ watches:
   region_id: 202
   specialization_id: 16234
   clinic_id: -1
-  doctor_id: 333458
+  doctor_id: -1
   booking_type: 1
-  days_ahead: 90
+  days_ahead: 30
   email_to: p.iwonastolarz@gmail.com
