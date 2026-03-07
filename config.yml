@@ -49,9 +49,9 @@ watches:
   booking_type: 1
   days_ahead: 90
   email_to: p.iwonastolarz@gmail.com
-- name: Internista – Kraków
+- name: Medicover Express - przeziębienie, grypa - porada telefoniczna – Kraków
   region_id: 202
-  specialization_id: 9
+  specialization_id: 55522
   clinic_id: 59886
   doctor_id: 333458
   booking_type: 2
