@@ -87,7 +87,7 @@ BOOK_ENDPOINT    = "/appointments/api/v2/search-appointments/book-appointment"
 
 IMAP_HOST      = "imap.interia.pl"
 IMAP_PORT      = 993
-BOOKING_WAIT_S = int(os.environ.get("BOOKING_WAIT_SECONDS", "300"))  # override lokalnie
+BOOKING_WAIT_S = int(os.environ.get("BOOKING_WAIT_SECONDS", "240"))  # override lokalnie
 IMAP_POLL_S    = 5     # odpytuj IMAP co 5 sekund
 
 DEFAULT_HEADERS = {
@@ -523,7 +523,7 @@ def send_email(appointments: list[dict], cfg: dict,
                 )
         html_parts.append(
             "<p style='color:#888;font-size:12px;margin-top:16px'>"
-            "Masz 5 minut na kliknięcie przycisku. "
+            "Masz 4 minuty na kliknięcie przycisku. "
             "Po kliknięciu wyślij wiadomość, która się otworzy w kliencie pocztowym.</p>"
             "</body></html>"
         )
