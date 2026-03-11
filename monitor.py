@@ -677,6 +677,60 @@ def wait_for_slot_signal(cfg: dict, slot_tokens: dict) -> "str | None":
     return None
 
 
+def send_booking_failure(slot: dict, cfg: dict, error: Exception) -> None:
+    """Send an email notification after a failed booking attempt."""
+    raw_dt = slot.get("appointmentDate", "?")
+    try:
+        dt = datetime.fromisoformat(raw_dt).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        dt = raw_dt
+    doctor     = _slot_val(slot, "doctor.name", "doctor.fullName", "doctorName")
+    clinic     = _slot_val(slot, "clinic.name", "clinic.displayName", "clinicName")
+    spec       = _slot_val(slot, "specialty.name", "specialty.displayName", "specializationName")
+    watch_name = slot.get("_watch_name", "")
+
+    error_str  = str(error)
+    if "futureLimitReached" in error_str:
+        reason = "Osiągnięto limit przyszłych wizyt tego specjalisty. Odwołaj jedną z istniejących wizyt i spróbuj ponownie."
+    elif "409" in error_str:
+        reason = f"Konflikt rezerwacji (409). Termin mógł zostać zajęty przez kogoś innego."
+    else:
+        reason = error_str
+
+    subject = f"BŁĄD rezerwacji! {'(' + watch_name + ') ' if watch_name else ''}{dt}"
+    body = (
+        f"Rezerwacja nie powiodła się.\n\n"
+        f"Data:        {dt}\n"
+        f"Lekarz:      {doctor}\n"
+        f"Placówka:    {clinic}\n"
+        f"Specjalność: {spec}\n\n"
+        f"Powód: {reason}\n\n"
+        f"Zarządzaj wizytami: https://online24.medicover.pl\n"
+    )
+
+    msg = MIMEMultipart()
+    msg["From"]    = cfg["smtp_user"]
+    msg["To"]      = cfg["email_to"]
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+    host = cfg["smtp_host"]
+    port = int(cfg.get("smtp_port", 465))
+    try:
+        if port == 465:
+            with smtplib.SMTP_SSL(host, port, timeout=30) as server:
+                server.login(cfg["smtp_user"], cfg["smtp_pass"])
+                server.sendmail(cfg["smtp_user"], cfg["email_to"], msg.as_string())
+        else:
+            with smtplib.SMTP(host, port, timeout=30) as server:
+                server.ehlo(); server.starttls()
+                server.login(cfg["smtp_user"], cfg["smtp_pass"])
+                server.sendmail(cfg["smtp_user"], cfg["email_to"], msg.as_string())
+        log.info("Email o błędzie rezerwacji wysłany.")
+    except Exception as mail_err:
+        log.error("Nie udało się wysłać emaila o błędzie: %s", mail_err)
+
+
 def send_booking_confirmation(slot: dict, cfg: dict, appt_id: int) -> None:
     """Send a confirmation email after successful booking."""
     raw_dt = slot.get("appointmentDate", "?")
@@ -880,6 +934,7 @@ def run_monitor(args):
                 send_booking_confirmation(slot_to_book, email_cfg, appt_id)
             except Exception as e:
                 log.error("Błąd rezerwacji: %s", e)
+                send_booking_failure(slot_to_book, email_cfg, e)
         else:
             log.info("Brak sygnału w ciągu %ds — termin nie zarezerwowany.", BOOKING_WAIT_S)
 
