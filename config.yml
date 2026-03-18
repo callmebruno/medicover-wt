@@ -34,3 +34,32 @@ watches:
   booking_type: 1
   days_ahead: 30
   time_from: '15:00'
+- name: Dermatolog dorośli – Kraków
+  region_id: 202
+  specialization_id: 3
+  clinic_id: 13038
+  doctor_id: -1
+  booking_type: 1
+  days_ahead: 60
+  email_to: p.iwonastolarz@gmail.com
+- name: Dermatolog dorośli – Kraków
+  region_id: 202
+  specialization_id: 3
+  clinic_id: 13038
+  doctor_id: -1
+  booking_type: 1
+  days_ahead: 60
+- name: Stomatolog - przegląd – Kraków
+  region_id: 202
+  specialization_id: 22890
+  clinic_id: 59886
+  doctor_id: -1
+  booking_type: 1
+  days_ahead: 60
+- name: Higienizacja standardowa – Kraków
+  region_id: 202
+  specialization_id: 112
+  clinic_id: 59886
+  doctor_id: -1
+  booking_type: 1
+  days_ahead: 60
