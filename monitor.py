@@ -165,9 +165,10 @@ class MedicoverSession:
         )
 
         # Step 1 — initiate authorization (do NOT follow redirects manually)
+        authorize_url = f"{LOGIN_URL}/connect/authorize{auth_params}"
         log.info("[Auth 1/5] GET %s/connect/authorize …", LOGIN_URL)
         resp = self.session.get(
-            f"{LOGIN_URL}/connect/authorize{auth_params}",
+            authorize_url,
             allow_redirects=False,
             timeout=30,
         )
@@ -239,6 +240,13 @@ class MedicoverSession:
             )
             next_url = resp.headers.get("Location")
             log.info("[Auth 3.5/5] After MFA skip, redirect: %s", next_url)
+
+            # If MFA skip redirected to homepage instead of callback, re-trigger authorize
+            if not next_url or next_url == "/" or "callback" not in next_url:
+                log.info("[Auth 3.5/5] MFA redirect lost callback — re-triggering authorize …")
+                resp = self.session.get(authorize_url, allow_redirects=False, timeout=30)
+                next_url = resp.headers.get("Location")
+                log.info("[Auth 3.5/5] Re-authorize redirect: %s", next_url)
 
         # Step 4 — follow callback to get authorization code
         step4_url = f"{LOGIN_URL}{next_url}" if next_url and next_url.startswith("/") else next_url
@@ -399,9 +407,11 @@ class MedicoverSession:
 
         Returns dict with keys like 'specialties', 'clinics', 'doctors'.
         """
+        visit_type = "Phone" if bookingtype == 2 else "Center"
         params: dict = {
             "SlotSearchType": 0,
             "RegionIds": region,
+            "VisitType": visit_type,
         }
         if specialization > 0:
             params["SpecialtyIds"] = specialization
