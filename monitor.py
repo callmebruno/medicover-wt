@@ -132,6 +132,79 @@ class MedicoverSession:
         return base64.urlsafe_b64encode(digest).decode("utf-8").rstrip("=")
 
     # ------------------------------------------------------------------
+    # MFA — fetch OTP code from IMAP inbox
+    # ------------------------------------------------------------------
+
+    def _fetch_mfa_code_from_imap(self, timeout_s: int = 120) -> "str | None":
+        """Poll IMAP for Medicover MFA verification code email.
+
+        Looks for an email from medicover@medicover.pl with a 6-digit code.
+        Returns the code string or None if not found within timeout.
+        """
+        import imaplib
+        import email as email_lib
+        import re
+
+        imap_host = os.environ.get("IMAP_HOST", os.environ.get("SMTP_HOST", ""))
+        imap_user = os.environ.get("SMTP_USER", "")
+        imap_pass = os.environ.get("SMTP_PASS", "")
+
+        if not all([imap_host, imap_user, imap_pass]):
+            log.error("Brak danych IMAP (SMTP_HOST/SMTP_USER/SMTP_PASS) — nie mogę pobrać kodu MFA.")
+            return None
+
+        today_str = date.today().strftime("%d-%b-%Y")
+        deadline = time.time() + timeout_s
+        poll_interval = 5
+
+        try:
+            with imaplib.IMAP4_SSL(imap_host, 993) as imap:
+                imap.login(imap_user, imap_pass)
+                imap.select("INBOX")
+                log.info("IMAP: czekam na kod MFA (timeout %ds) …", timeout_s)
+
+                while time.time() < deadline:
+                    imap.noop()
+                    # Search for recent Medicover emails
+                    status, msgs = imap.search(
+                        None,
+                        f'(FROM "medicover" SINCE "{today_str}")',
+                    )
+                    if status == "OK" and msgs[0]:
+                        msg_ids = msgs[0].split()
+                        # Check most recent emails first
+                        for mid in reversed(msg_ids[-10:]):
+                            _, msg_data = imap.fetch(mid, "(RFC822)")
+                            if not msg_data or not msg_data[0]:
+                                continue
+                            raw = msg_data[0][1]
+                            msg = email_lib.message_from_bytes(raw)
+                            # Extract body
+                            body = ""
+                            if msg.is_multipart():
+                                for part in msg.walk():
+                                    ct = part.get_content_type()
+                                    if ct in ("text/plain", "text/html"):
+                                        payload = part.get_payload(decode=True)
+                                        if payload:
+                                            body += payload.decode("utf-8", errors="replace")
+                            else:
+                                payload = msg.get_payload(decode=True)
+                                if payload:
+                                    body = payload.decode("utf-8", errors="replace")
+
+                            # Look for 6-digit code
+                            match = re.search(r'\b(\d{6})\b', body)
+                            if match and "weryfikacyjny" in body.lower():
+                                return match.group(1)
+                    time.sleep(poll_interval)
+
+                log.warning("IMAP: timeout — nie znaleziono kodu MFA.")
+        except Exception as e:
+            log.error("IMAP: błąd podczas pobierania kodu MFA: %s", e)
+        return None
+
+    # ------------------------------------------------------------------
     # Authentication  (OAuth2 Authorization Code + PKCE)
     # ------------------------------------------------------------------
 
@@ -219,29 +292,78 @@ class MedicoverSession:
                 f"{('Komunikat: ' + err_msg) if err_msg else 'Sprawdź login i hasło lub spróbuj później.'}"
             )
 
-        # Step 3.5 — skip MFA-gate if present
-        if next_url and "MfaGate" in next_url:
-            log.info("[Auth 3.5/5] MFA gate — skipping enrollment prompt …")
+        # Step 3.5 — handle MFA (code verification or enrollment skip)
+        if next_url and ("MfaGate" in next_url or "Mfa" in next_url):
             mfa_url = f"{LOGIN_URL}{next_url}" if next_url.startswith("/") else next_url
+            log.info("[Auth 3.5/5] MFA detected: %s", mfa_url)
             resp = self.session.get(mfa_url, allow_redirects=False, timeout=30)
             soup = BeautifulSoup(resp.content, "html.parser")
+
+            # Check if this is a code-entry page (OTP via email)
+            code_input = soup.find("input", {"name": "Input.Code"}) or \
+                         soup.find("input", {"name": "Input.VerificationCode"}) or \
+                         soup.find("input", {"id": lambda x: x and "code" in x.lower()}) if soup else None
+
             mfa_csrf = soup.find("input", {"name": "__RequestVerificationToken"})
             ret_url = soup.find("input", {"name": "Input.ReturnUrl"})
-            mfa_data = {
-                "__RequestVerificationToken": mfa_csrf.get("value") if mfa_csrf else "",
-                "Input.ReturnUrl": ret_url.get("value") if ret_url
-                                   else f"/connect/authorize/callback{auth_params}",
-            }
-            resp = self.session.post(
-                f"{LOGIN_URL}/Account/MfaGate?handler=SkipMfaGate",
-                data=mfa_data,
-                allow_redirects=False,
-                timeout=30,
-            )
-            next_url = resp.headers.get("Location")
-            log.info("[Auth 3.5/5] After MFA skip, redirect: %s", next_url)
+            return_url_val = ret_url.get("value") if ret_url \
+                             else f"/connect/authorize/callback{auth_params}"
+            csrf_val = mfa_csrf.get("value") if mfa_csrf else ""
 
-            # If MFA skip redirected to homepage instead of callback, re-trigger authorize
+            if code_input:
+                # --- MFA code verification ---
+                code_field_name = code_input.get("name", "Input.Code")
+                log.info("[Auth 3.5/5] MFA wymaga kodu — pobieram z IMAP …")
+
+                otp = self._fetch_mfa_code_from_imap()
+                if not otp:
+                    raise AuthError("Nie udało się pobrać kodu MFA z emaila w ciągu 120s.")
+
+                log.info("[Auth 3.5/5] Kod MFA: %s — wysyłam …", otp)
+
+                # Find the form action URL
+                form = soup.find("form")
+                form_action = form.get("action", "") if form else ""
+                if form_action and not form_action.startswith("http"):
+                    form_action = f"{LOGIN_URL}{form_action}"
+                if not form_action:
+                    form_action = mfa_url  # POST back to the same URL
+
+                mfa_data = {
+                    "__RequestVerificationToken": csrf_val,
+                    "Input.ReturnUrl": return_url_val,
+                    code_field_name: otp,
+                }
+                resp = self.session.post(
+                    form_action, data=mfa_data,
+                    allow_redirects=False, timeout=30,
+                )
+                next_url = resp.headers.get("Location")
+                log.info("[Auth 3.5/5] After MFA code submit, redirect: %s", next_url)
+
+                # Follow any intermediate redirects (e.g. MfaGate -> callback)
+                while next_url and "callback" not in next_url and next_url != "/":
+                    step_url = f"{LOGIN_URL}{next_url}" if next_url.startswith("/") else next_url
+                    resp = self.session.get(step_url, allow_redirects=False, timeout=30)
+                    next_url = resp.headers.get("Location")
+                    log.info("[Auth 3.5/5] Following redirect: %s", next_url)
+            else:
+                # --- MFA enrollment skip (legacy) ---
+                log.info("[Auth 3.5/5] MFA gate — skipping enrollment prompt …")
+                mfa_data = {
+                    "__RequestVerificationToken": csrf_val,
+                    "Input.ReturnUrl": return_url_val,
+                }
+                resp = self.session.post(
+                    f"{LOGIN_URL}/Account/MfaGate?handler=SkipMfaGate",
+                    data=mfa_data,
+                    allow_redirects=False,
+                    timeout=30,
+                )
+                next_url = resp.headers.get("Location")
+                log.info("[Auth 3.5/5] After MFA skip, redirect: %s", next_url)
+
+            # If MFA redirected to homepage instead of callback, re-trigger authorize
             if not next_url or next_url == "/" or "callback" not in next_url:
                 log.info("[Auth 3.5/5] MFA redirect lost callback — re-triggering authorize …")
                 resp = self.session.get(authorize_url, allow_redirects=False, timeout=30)
