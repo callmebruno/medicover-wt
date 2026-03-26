@@ -207,21 +207,23 @@ class MedicoverSession:
         poll_interval = 5
 
         try:
-            with imaplib.IMAP4_SSL(imap_host, 993) as imap:
-                imap.login(imap_user, imap_pass)
-                imap.select("INBOX")
-
-                # Use pre-captured known_ids if provided, otherwise snapshot now
-                if known_ids is None:
+            # Use pre-captured known_ids if not provided, snapshot via fresh connection
+            if known_ids is None:
+                with imaplib.IMAP4_SSL(imap_host, 993) as imap:
+                    imap.login(imap_user, imap_pass)
+                    imap.select("INBOX")
                     status, msgs = imap.search(
                         None, f'(FROM "medicover" SINCE "{today_str}")',
                     )
                     known_ids = set(msgs[0].split()) if status == "OK" and msgs[0] else set()
-                log.info("IMAP: czekam na NOWY kod MFA (timeout %ds, istniejących: %d) …",
-                         timeout_s, len(known_ids))
+            log.info("IMAP: czekam na NOWY kod MFA (timeout %ds, istniejących: %d) …",
+                     timeout_s, len(known_ids))
 
-                while time.time() < deadline:
-                    imap.noop()
+            while time.time() < deadline:
+                # Fresh connection each poll — ensures server shows newest emails
+                with imaplib.IMAP4_SSL(imap_host, 993) as imap:
+                    imap.login(imap_user, imap_pass)
+                    imap.select("INBOX")
                     status, msgs = imap.search(
                         None, f'(FROM "medicover" SINCE "{today_str}")',
                     )
@@ -250,7 +252,7 @@ class MedicoverSession:
                             match = re.search(r'\b(\d{6})\b', body)
                             if match and "weryfikacyjny" in body.lower():
                                 return match.group(1)
-                    time.sleep(poll_interval)
+                time.sleep(poll_interval)
 
                 log.warning("IMAP: timeout — nie znaleziono kodu MFA.")
         except Exception as e:
