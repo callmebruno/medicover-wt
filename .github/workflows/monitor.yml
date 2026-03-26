@@ -37,8 +37,11 @@ jobs:
           echo "18.153.162.82 online24.medicover.pl" | sudo tee -a /etc/hosts
 
       - name: Sprawdź terminy i wyślij email
+        timeout-minutes: 330
         run: python monitor.py monitor
         env:
+          MONITOR_INTERVAL_S: "300"
+          MONITOR_DURATION_S: "18000"
           # Dane logowania Medicover — GitHub Secrets (nigdy nie commituj!)
           MEDICOVER_USER: ${{ secrets.MEDICOVER_USER }}
           MEDICOVER_PASS: ${{ secrets.MEDICOVER_PASS }}

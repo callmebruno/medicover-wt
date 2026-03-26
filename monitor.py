@@ -1180,78 +1180,109 @@ def run_monitor(args):
         sess.log_in()
         sess.save_session()
 
-    notified = _load_notified()
-    new_notified: set = set()
+    loop_interval = int(os.environ.get("MONITOR_INTERVAL_S", "300"))  # 5 min
+    loop_duration = int(os.environ.get("MONITOR_DURATION_S", "0"))    # 0 = single run
+    run_until = time.time() + loop_duration if loop_duration > 0 else 0
+    loop_i = 0
 
-    # Collect slots from all watches
-    all_booking_slot_tokens: dict = {}   # token -> slot
-    slots_by_email: dict = {}            # email_to -> {token -> slot}
-
-    for i, watch in enumerate(watches):
-        if i > 0:
-            time.sleep(3)  # pauza między czujkami — unikamy 429
-        days = int(watch.get("days_ahead", 30))
-        end_date = (date.today() + timedelta(days=days)).isoformat()
-        watch_name = watch.get("name", "")
-        log.info("Sprawdzam czujkę: %s", watch_name or "(bez nazwy)")
-        appts = sess.search_appointments(
-            region=int(watch["region_id"]),
-            specialization=int(watch["specialization_id"]),
-            clinic=int(watch.get("clinic_id", -1)),
-            doctor=int(watch.get("doctor_id", -1)),
-            end_date=end_date,
-            bookingtype=int(watch.get("booking_type", 2)),
-            time_from=watch.get("time_from") or None,
-            time_to=watch.get("time_to") or None,
-        )
-        if not appts:
-            log.info("Brak wolnych terminów dla czujki: %s", watch_name or "(bez nazwy)")
-            continue
-        # Filter out already-notified slots
-        appts = [a for a in appts if _slot_key(a) not in notified]
-        if not appts:
-            log.info("Wszystkie terminy dla czujki '%s' już zgłoszone dziś — pomijam.", watch_name or "(bez nazwy)")
-            continue
-        for a in appts:
-            a["_watch_name"] = watch_name
-            a["_watch"] = watch
-
-        new_notified |= {_slot_key(a) for a in appts}
-
-        # Group slots by target email address
-        target_email = watch.get("email_to") or email_cfg["email_to"]
-        slot_tokens = {str(uuid.uuid4())[:8].upper(): a for a in appts}
-        all_booking_slot_tokens.update(slot_tokens)
-        slots_by_email.setdefault(target_email, {}).update(slot_tokens)
-
-    # Send separate email per recipient, then wait once for IMAP signal
-    for target_email, tokens in slots_by_email.items():
-        cfg_for_send = dict(email_cfg)
-        cfg_for_send["email_to"] = target_email
-        send_email(list(tokens.values()), cfg_for_send, slot_tokens=tokens)
-        log.info("Email wysłany do %s (%d terminów).", target_email, len(tokens))
-
-    if all_booking_slot_tokens:
-        log.info("Czekam %ds na sygnał rezerwacji (tokeny: %s)…",
-                 BOOKING_WAIT_S, list(all_booking_slot_tokens.keys()))
-        chosen = wait_for_slot_signal(email_cfg, all_booking_slot_tokens)
-        if chosen:
-            slot_to_book = all_booking_slot_tokens[chosen]
-            log.info("Rezerwuję termin z tokenem %s …", chosen)
+    while True:
+        loop_i += 1
+        if loop_i > 1:
+            log.info("=== Iteracja %d — czekam %d min ===", loop_i, loop_interval // 60)
+            time.sleep(loop_interval)
+            # Re-check session validity
             try:
-                result = sess.book_appointment(slot_to_book)
-                appt_id = result.get("appointmentId")
-                log.info("Zarezerwowano! appointmentId=%s", appt_id)
-                send_booking_confirmation(slot_to_book, email_cfg, appt_id)
-            except Exception as e:
-                log.error("Błąd rezerwacji: %s", e)
-                send_booking_failure(slot_to_book, email_cfg, e)
-        else:
-            log.info("Brak sygnału w ciągu %ds — termin nie zarezerwowany.", BOOKING_WAIT_S)
+                test = sess.session.get(API_BASE + SEARCH_ENDPOINT,
+                                        params={"RegionIds": 202, "PageSize": 1},
+                                        timeout=15)
+                if test.status_code == 401:
+                    log.info("Sesja wygasła — ponawiam logowanie…")
+                    sess.log_in()
+                    sess.save_session()
+            except Exception:
+                log.info("Błąd połączenia — ponawiam logowanie…")
+                sess.log_in()
+                sess.save_session()
 
-    if new_notified:
-        _save_notified(new_notified)
-    _git_push_state()  # always push session.json + notified.json
+        log.info("=== Sprawdzanie terminów [iteracja %d] ===", loop_i)
+        notified = _load_notified()
+        new_notified: set = set()
+
+        all_booking_slot_tokens: dict = {}
+        slots_by_email: dict = {}
+
+        for i, watch in enumerate(watches):
+            if i > 0:
+                time.sleep(3)
+            days = int(watch.get("days_ahead", 30))
+            end_date = (date.today() + timedelta(days=days)).isoformat()
+            watch_name = watch.get("name", "")
+            log.info("Sprawdzam czujkę: %s", watch_name or "(bez nazwy)")
+            try:
+                appts = sess.search_appointments(
+                    region=int(watch["region_id"]),
+                    specialization=int(watch["specialization_id"]),
+                    clinic=int(watch.get("clinic_id", -1)),
+                    doctor=int(watch.get("doctor_id", -1)),
+                    end_date=end_date,
+                    bookingtype=int(watch.get("booking_type", 2)),
+                    time_from=watch.get("time_from") or None,
+                    time_to=watch.get("time_to") or None,
+                )
+            except Exception as e:
+                log.error("Błąd wyszukiwania: %s", e)
+                continue
+            if not appts:
+                log.info("Brak wolnych terminów dla czujki: %s", watch_name or "(bez nazwy)")
+                continue
+            appts = [a for a in appts if _slot_key(a) not in notified]
+            if not appts:
+                log.info("Wszystkie terminy dla czujki '%s' już zgłoszone dziś — pomijam.", watch_name or "(bez nazwy)")
+                continue
+            for a in appts:
+                a["_watch_name"] = watch_name
+                a["_watch"] = watch
+
+            new_notified |= {_slot_key(a) for a in appts}
+
+            target_email = watch.get("email_to") or email_cfg["email_to"]
+            slot_tokens = {str(uuid.uuid4())[:8].upper(): a for a in appts}
+            all_booking_slot_tokens.update(slot_tokens)
+            slots_by_email.setdefault(target_email, {}).update(slot_tokens)
+
+        for target_email, tokens in slots_by_email.items():
+            cfg_for_send = dict(email_cfg)
+            cfg_for_send["email_to"] = target_email
+            send_email(list(tokens.values()), cfg_for_send, slot_tokens=tokens)
+            log.info("Email wysłany do %s (%d terminów).", target_email, len(tokens))
+
+        if all_booking_slot_tokens:
+            log.info("Czekam %ds na sygnał rezerwacji (tokeny: %s)…",
+                     BOOKING_WAIT_S, list(all_booking_slot_tokens.keys()))
+            chosen = wait_for_slot_signal(email_cfg, all_booking_slot_tokens)
+            if chosen:
+                slot_to_book = all_booking_slot_tokens[chosen]
+                log.info("Rezerwuję termin z tokenem %s …", chosen)
+                try:
+                    result = sess.book_appointment(slot_to_book)
+                    appt_id = result.get("appointmentId")
+                    log.info("Zarezerwowano! appointmentId=%s", appt_id)
+                    send_booking_confirmation(slot_to_book, email_cfg, appt_id)
+                except Exception as e:
+                    log.error("Błąd rezerwacji: %s", e)
+                    send_booking_failure(slot_to_book, email_cfg, e)
+            else:
+                log.info("Brak sygnału w ciągu %ds — termin nie zarezerwowany.", BOOKING_WAIT_S)
+
+        if new_notified:
+            _save_notified(new_notified)
+        _git_push_state()
+
+        # Exit if single run or duration exceeded
+        if run_until == 0 or time.time() >= run_until:
+            break
+
+    log.info("Monitor zakończony po %d iteracjach.", loop_i)
 
 
 # ---------------------------------------------------------------------------
