@@ -290,6 +290,7 @@ class MedicoverSession:
           4. Follow callback redirect to extract authorization code
           5. POST /connect/token → receive access_token
         """
+
         # --- PKCE + OAuth state ---
         code_verifier = "".join(uuid.uuid4().hex for _ in range(3))
         code_challenge = self._pkce_challenge(code_verifier)
@@ -332,7 +333,7 @@ class MedicoverSession:
                 step4_url = f"{LOGIN_URL}{step4_url}"
             elif step4_url.startswith("https://online24"):
                 # Already a full callback URL with code — parse it directly
-                from urllib.parse import urlparse, parse_qs
+        
                 parsed = urlparse(step4_url)
                 qs = parse_qs(parsed.query)
                 auth_code = qs.get("code", [None])[0]
@@ -345,7 +346,7 @@ class MedicoverSession:
             resp = self.session.get(step4_url, allow_redirects=False, timeout=30)
             next_url = resp.headers.get("Location")
             if next_url and "code=" in next_url:
-                from urllib.parse import urlparse, parse_qs
+        
                 parsed = urlparse(next_url)
                 qs = parse_qs(parsed.query)
                 auth_code = qs.get("code", [None])[0]
