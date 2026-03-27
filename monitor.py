@@ -202,7 +202,8 @@ class MedicoverSession:
             log.error("Brak danych IMAP (SMTP_HOST/SMTP_USER/SMTP_PASS) — nie mogę pobrać kodu MFA.")
             return None
 
-        today_str = date.today().strftime("%d-%b-%Y")
+        # Use yesterday to avoid timezone mismatch (GitHub Actions = UTC, Interia = CET)
+        yesterday_str = (date.today() - timedelta(days=1)).strftime("%d-%b-%Y")
         deadline = time.time() + timeout_s
         poll_interval = 5
 
@@ -213,7 +214,7 @@ class MedicoverSession:
                     imap.login(imap_user, imap_pass)
                     imap.select("INBOX")
                     status, msgs = imap.search(
-                        None, f'(FROM "medicover" SINCE "{today_str}")',
+                        None, f'(FROM "medicover" SINCE "{yesterday_str}")',
                     )
                     known_ids = set(msgs[0].split()) if status == "OK" and msgs[0] else set()
             log.info("IMAP: czekam na NOWY kod MFA (timeout %ds, istniejących: %d) …",
@@ -225,7 +226,7 @@ class MedicoverSession:
                     imap.login(imap_user, imap_pass)
                     imap.select("INBOX")
                     status, msgs = imap.search(
-                        None, f'(FROM "medicover" SINCE "{today_str}")',
+                        None, f'(FROM "medicover" SINCE "{yesterday_str}")',
                     )
                     if status == "OK" and msgs[0]:
                         msg_ids = msgs[0].split()
@@ -415,13 +416,13 @@ class MedicoverSession:
                 _imap_host = os.environ.get("IMAP_HOST", os.environ.get("SMTP_HOST", ""))
                 _imap_user = os.environ.get("SMTP_USER", "")
                 _imap_pass = os.environ.get("SMTP_PASS", "")
-                _today = date.today().strftime("%d-%b-%Y")
+                _yesterday = (date.today() - timedelta(days=1)).strftime("%d-%b-%Y")
                 _pre_ids = set()
                 try:
                     with _imaplib.IMAP4_SSL(_imap_host, 993) as _im:
                         _im.login(_imap_user, _imap_pass)
                         _im.select("INBOX")
-                        _st, _ms = _im.search(None, f'(FROM "medicover" SINCE "{_today}")')
+                        _st, _ms = _im.search(None, f'(FROM "medicover" SINCE "{_yesterday}")')
                         if _st == "OK" and _ms[0]:
                             _pre_ids = set(_ms[0].split())
                     log.info("[Auth 3.5/5] IMAP snapshot: %d istniejących emaili", len(_pre_ids))
