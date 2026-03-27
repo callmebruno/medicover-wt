@@ -160,17 +160,28 @@ HTML = r"""
   <h2>1. Logowanie do Medicover</h2>
   <div class="row">
     <div class="field">
-      <label>Identyfikator</label>
+      <label>Identyfikator Medicover</label>
       <input id="mc-user" type="text" placeholder="np. 12345678">
     </div>
     <div class="field">
-      <label>Hasło</label>
+      <label>Hasło Medicover</label>
       <input id="mc-pass" type="password" placeholder="Hasło do konta Medicover">
+    </div>
+  </div>
+  <div class="row" style="margin-top:.75rem;">
+    <div class="field">
+      <label>Email IMAP (do odbioru kodu MFA)</label>
+      <input id="smtp-user" type="email" placeholder="np. jan@interia.pl">
+    </div>
+    <div class="field">
+      <label>Hasło email</label>
+      <input id="smtp-pass" type="password" placeholder="Hasło do skrzynki email">
     </div>
     <div class="field" style="justify-content: flex-end;">
       <button class="btn-primary" onclick="login()">Zaloguj</button>
     </div>
   </div>
+  <p class="note">Dane logowania są zapisywane lokalnie w accounts.json (nie trafiają do gita).</p>
 </div>
 
 <!-- 2. Nowa czujka -->
@@ -386,10 +397,13 @@ function removeWatch(i) {
 async function login() {
   const user = $('mc-user').value.trim();
   const pass = $('mc-pass').value;
-  if (!user || !pass) { showStatus('Podaj identyfikator i hasło.', 'err'); return; }
+  const smtpUser = $('smtp-user').value.trim();
+  const smtpPass = $('smtp-pass').value;
+  if (!user || !pass) { showStatus('Podaj identyfikator i hasło Medicover.', 'err'); return; }
+  if (!smtpUser || !smtpPass) { showStatus('Podaj dane email (do odbioru kodu MFA).', 'err'); return; }
   showSpinner('Logowanie (może potrwać do 2 min — MFA)…');
   try {
-    await api('POST', '/api/login', { user, pass });
+    await api('POST', '/api/login', { user, pass, smtp_user: smtpUser, smtp_pass: smtpPass, repo: currentRepo });
     // Poll login status
     while (true) {
       await new Promise(r => setTimeout(r, 2000));
@@ -534,6 +548,14 @@ async function switchRepo() {
   currentRepo = $('sel-repo').value;
   $('repo-status').innerHTML = '<span class="spinner"></span>Ładuję config…';
   try {
+    // Load saved account credentials for this repo
+    try {
+      const acc = await api('GET', `/api/account?repo=${currentRepo}`);
+      if (acc.mc_user)   $('mc-user').value   = acc.mc_user;
+      if (acc.mc_pass)   $('mc-pass').value   = acc.mc_pass;
+      if (acc.smtp_user) $('smtp-user').value = acc.smtp_user;
+      if (acc.smtp_pass) $('smtp-pass').value = acc.smtp_pass;
+    } catch(e) { /* no saved account */ }
     const cfg = await api('GET', `/api/load?remote=${currentRepo}`);
     if (cfg.EMAIL_TO)  $('email-to').value  = cfg.EMAIL_TO;
     if (cfg.SMTP_HOST) $('smtp-host').value = cfg.SMTP_HOST;
@@ -590,21 +612,61 @@ def api_login_status():
     return jsonify(**_login_status)
 
 
+ACCOUNTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "accounts.json")
+
+
+def _load_accounts() -> dict:
+    try:
+        with open(ACCOUNTS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_accounts(accounts: dict):
+    with open(ACCOUNTS_FILE, "w", encoding="utf-8") as f:
+        json.dump(accounts, f, ensure_ascii=False, indent=2)
+
+
+@app.get("/api/account")
+def api_account():
+    repo = request.args.get("repo", "origin")
+    accounts = _load_accounts()
+    acc = accounts.get(repo, {})
+    return jsonify(acc)
+
+
 @app.post("/api/login")
 def api_login():
     global _session
     data = request.get_json(force=True)
     user = data.get("user", "").strip()
     password = data.get("pass", "")
+    smtp_user = data.get("smtp_user", "").strip()
+    smtp_pass = data.get("smtp_pass", "")
+    repo = data.get("repo", "origin")
     if not user or not password:
         return jsonify(error="Podaj identyfikator i hasło"), 400
+
+    # Save credentials locally per repo
+    accounts = _load_accounts()
+    accounts[repo] = {
+        "mc_user": user, "mc_pass": password,
+        "smtp_user": smtp_user, "smtp_pass": smtp_pass,
+    }
+    _save_accounts(accounts)
+
+    # Set env vars for IMAP access during MFA
+    if smtp_user:
+        os.environ["SMTP_USER"] = smtp_user
+    if smtp_pass:
+        os.environ["SMTP_PASS"] = smtp_pass
 
     _login_status.update(state="working", message="Logowanie…")
 
     def _do_login():
         global _session
 
-        # Hook into monitor logging to update status
         class _StatusHandler(logging.Handler):
             _msg_map = [
                 ("IMAP: czekam", "Czekam na kod MFA z emaila…"),
