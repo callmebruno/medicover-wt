@@ -370,11 +370,24 @@ async function login() {
   const user = $('mc-user').value.trim();
   const pass = $('mc-pass').value;
   if (!user || !pass) { showStatus('Podaj identyfikator i hasło.', 'err'); return; }
-  showSpinner('Logowanie…');
+  showSpinner('Logowanie (może potrwać do 2 min — MFA)…');
   try {
     await api('POST', '/api/login', { user, pass });
-    showStatus('Zalogowano pomyślnie. Ładuję regiony…', 'ok');
-    await loadRegions();
+    // Poll login status
+    while (true) {
+      await new Promise(r => setTimeout(r, 2000));
+      const st = await api('GET', '/api/login-status');
+      if (st.state === 'working') {
+        showSpinner(st.message || 'Logowanie…');
+      } else if (st.state === 'done') {
+        showStatus(st.message || 'Zalogowano pomyślnie. Ładuję regiony…', 'ok');
+        await loadRegions();
+        return;
+      } else if (st.state === 'error') {
+        showStatus('Błąd logowania: ' + st.message, 'err');
+        return;
+      }
+    }
   } catch(e) {
     console.error('Login error:', e.message);
     showStatus('Błąd logowania: ' + e.message, 'err');
@@ -519,6 +532,16 @@ def index():
     return render_template_string(HTML)
 
 
+import threading
+
+_login_status = {"state": "idle", "message": ""}
+
+
+@app.get("/api/login-status")
+def api_login_status():
+    return jsonify(**_login_status)
+
+
 @app.post("/api/login")
 def api_login():
     global _session
@@ -527,17 +550,54 @@ def api_login():
     password = data.get("pass", "")
     if not user or not password:
         return jsonify(error="Podaj identyfikator i hasło"), 400
-    try:
-        sess = MedicoverSession(user, password)
-        sess.log_in()
-        _session = sess
-        return jsonify(ok=True)
-    except AuthError as e:
-        log.error("[Login] AuthError: %s", e)
-        return jsonify(error=str(e)), 401
-    except Exception as e:
-        log.error("[Login] Nieoczekiwany błąd: %s", e, exc_info=True)
-        return jsonify(error=f"Błąd serwera: {e}"), 500
+
+    _login_status.update(state="working", message="Logowanie…")
+
+    def _do_login():
+        global _session
+
+        # Hook into monitor logging to update status
+        class _StatusHandler(logging.Handler):
+            _msg_map = [
+                ("IMAP: czekam", "Czekam na kod MFA z emaila…"),
+                ("Kod MFA:", "Kod MFA odebrany — wysyłam…"),
+                ("MFA detected", "MFA wymagane — pobieram kod z emaila…"),
+                ("Logowanie zakończone", "Logowanie zakończone!"),
+                ("SSO sesja", "SSO sesja ważna — pomijam MFA"),
+            ]
+            def emit(self, record):
+                msg = record.getMessage()
+                for trigger, status_msg in self._msg_map:
+                    if trigger in msg:
+                        _login_status.update(state="working", message=status_msg)
+                        break
+
+        handler = _StatusHandler()
+        monitor_log = logging.getLogger("monitor")
+        monitor_log.addHandler(handler)
+
+        try:
+            sess = MedicoverSession(user, password)
+            if sess.load_session():
+                _login_status.update(state="done", message="Zalogowano (zapisana sesja)")
+                _session = sess
+                return
+            _login_status.update(state="working", message="Wysyłam dane logowania…")
+            sess.log_in()
+            sess.save_session()
+            _session = sess
+            _login_status.update(state="done", message="Zalogowano pomyślnie")
+        except AuthError as e:
+            log.error("[Login] AuthError: %s", e)
+            _login_status.update(state="error", message=str(e))
+        except Exception as e:
+            log.error("[Login] Nieoczekiwany błąd: %s", e, exc_info=True)
+            _login_status.update(state="error", message=f"Błąd serwera: {e}")
+        finally:
+            monitor_log.removeHandler(handler)
+
+    threading.Thread(target=_do_login, daemon=True).start()
+    return jsonify(ok=True, message="Logowanie rozpoczęte")
 
 
 @app.get("/api/regions")
