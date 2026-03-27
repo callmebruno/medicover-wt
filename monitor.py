@@ -183,10 +183,11 @@ class MedicoverSession:
     # MFA — fetch OTP code from IMAP inbox
     # ------------------------------------------------------------------
 
-    def _fetch_mfa_code_from_imap(self, timeout_s: int = 120, known_uids: "set | None" = None) -> "str | None":
+    def _fetch_mfa_code_from_imap(self, timeout_s: int = 120, known_exists: "int | None" = None) -> "str | None":
         """Poll IMAP for Medicover MFA verification code email.
 
-        Uses UID-based SEARCH to reliably detect new emails across reconnects.
+        Uses EXISTS count + direct FETCH of newest messages (no SEARCH).
+        Interia's SEARCH index can be stale; EXISTS updates immediately.
         """
         import imaplib
         import email as email_lib
@@ -200,24 +201,26 @@ class MedicoverSession:
             log.error("Brak danych IMAP (SMTP_HOST/SMTP_USER/SMTP_PASS) — nie mogę pobrać kodu MFA.")
             return None
 
-        yesterday_str = (date.today() - timedelta(days=1)).strftime("%d-%b-%Y")
-        search_criteria = f'(FROM "medicover" SINCE "{yesterday_str}")'
         deadline = time.time() + timeout_s
         poll_interval = 5
 
-        def _get_uids(im):
-            im.select("INBOX")
-            st, data = im.uid("search", None, search_criteria)
-            if st == "OK" and data[0]:
-                return set(data[0].split())
-            return set()
+        def _select_inbox(im):
+            st, data = im.select("INBOX")
+            return int(data[0]) if st == "OK" else 0
 
-        def _extract_code(im, uid):
-            _, msg_data = im.uid("fetch", uid, "(RFC822)")
-            if not msg_data or not msg_data[0]:
+        def _extract_code_from_seq(im, seq_num):
+            try:
+                _, msg_data = im.fetch(str(seq_num), "(RFC822)")
+            except Exception:
+                return None
+            if not msg_data or not msg_data[0] or not isinstance(msg_data[0], tuple):
                 return None
             raw = msg_data[0][1]
             msg = email_lib.message_from_bytes(raw)
+            # Check sender
+            from_hdr = msg.get("From", "").lower()
+            if "medicover" not in from_hdr:
+                return None
             body = ""
             if msg.is_multipart():
                 for part in msg.walk():
@@ -237,28 +240,27 @@ class MedicoverSession:
             return None
 
         try:
-            if known_uids is None:
+            if known_exists is None:
                 with imaplib.IMAP4_SSL(imap_host, 993) as imap:
                     imap.login(imap_user, imap_pass)
-                    known_uids = _get_uids(imap)
-            log.info("IMAP: czekam na NOWY kod MFA (timeout %ds, znanych UID: %d) …",
-                     timeout_s, len(known_uids))
+                    known_exists = _select_inbox(imap)
+            log.info("IMAP: czekam na NOWY kod MFA (timeout %ds, EXISTS: %d) …",
+                     timeout_s, known_exists)
 
             while time.time() < deadline:
                 with imaplib.IMAP4_SSL(imap_host, 993) as imap:
                     imap.login(imap_user, imap_pass)
-                    current_uids = _get_uids(imap)
-                    new_uids = current_uids - known_uids
-                    if new_uids:
-                        log.info("IMAP: nowe emaile (UIDs: %s), sprawdzam…",
-                                 [u.decode() for u in sorted(new_uids)])
-                        for uid in sorted(new_uids, reverse=True):
-                            code = _extract_code(imap, uid)
+                    current = _select_inbox(imap)
+                    if current > known_exists:
+                        log.info("IMAP: nowe wiadomości (%d → %d), sprawdzam…",
+                                 known_exists, current)
+                        for seq in range(current, known_exists, -1):
+                            code = _extract_code_from_seq(imap, seq)
                             if code:
                                 return code
-                        known_uids = current_uids
+                        known_exists = current
                 time.sleep(poll_interval)
-                log.warning("IMAP: timeout — nie znaleziono kodu MFA.")
+                log.warning("IMAP: brak nowych wiadomości (EXISTS=%d)…", current)
         except Exception as e:
             log.error("IMAP: błąd podczas pobierania kodu MFA: %s", e)
         return None
