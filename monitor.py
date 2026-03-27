@@ -183,12 +183,11 @@ class MedicoverSession:
     # MFA — fetch OTP code from IMAP inbox
     # ------------------------------------------------------------------
 
-    def _fetch_mfa_code_from_imap(self, timeout_s: int = 120, known_ids: "set | None" = None) -> "str | None":
+    def _fetch_mfa_code_from_imap(self, timeout_s: int = 120, known_count: "int | None" = None) -> "str | None":
         """Poll IMAP for Medicover MFA verification code email.
 
-        Looks for an email from medicover@medicover.pl with a 6-digit code.
-        known_ids: set of IMAP message IDs to skip (captured before code was triggered).
-        Returns the code string or None if not found within timeout.
+        Uses EXISTS count (not SEARCH) to detect new messages — bypasses
+        stale search indexes on Interia when accessed from foreign IPs.
         """
         import imaplib
         import email as email_lib
@@ -202,57 +201,63 @@ class MedicoverSession:
             log.error("Brak danych IMAP (SMTP_HOST/SMTP_USER/SMTP_PASS) — nie mogę pobrać kodu MFA.")
             return None
 
-        # Use yesterday to avoid timezone mismatch (GitHub Actions = UTC, Interia = CET)
-        yesterday_str = (date.today() - timedelta(days=1)).strftime("%d-%b-%Y")
         deadline = time.time() + timeout_s
         poll_interval = 5
 
-        search_criteria = f'(FROM "medicover" SINCE "{yesterday_str}")'
+        def _get_exists(im):
+            """Get total message count from SELECT response."""
+            st, data = im.select("INBOX")
+            return int(data[0]) if st == "OK" else 0
+
+        def _extract_code(im, seq_num):
+            """Fetch message by sequence number and extract 6-digit code."""
+            _, msg_data = im.fetch(str(seq_num), "(RFC822)")
+            if not msg_data or not msg_data[0]:
+                return None
+            raw = msg_data[0][1]
+            msg = email_lib.message_from_bytes(raw)
+            body = ""
+            if msg.is_multipart():
+                for part in msg.walk():
+                    ct = part.get_content_type()
+                    if ct in ("text/plain", "text/html"):
+                        payload = part.get_payload(decode=True)
+                        if payload:
+                            body += payload.decode("utf-8", errors="replace")
+            else:
+                payload = msg.get_payload(decode=True)
+                if payload:
+                    body = payload.decode("utf-8", errors="replace")
+
+            match = re.search(r'\b(\d{6})\b', body)
+            if match and "weryfikacyjny" in body.lower():
+                return match.group(1)
+            return None
 
         try:
-            # Use pre-captured known_ids if not provided, snapshot via fresh connection
-            if known_ids is None:
+            # Snapshot: get current message count
+            if known_count is None:
                 with imaplib.IMAP4_SSL(imap_host, 993) as imap:
                     imap.login(imap_user, imap_pass)
-                    imap.select("INBOX")
-                    status, msgs = imap.uid("search", None, search_criteria)
-                    known_ids = set(msgs[0].split()) if status == "OK" and msgs[0] else set()
-            log.info("IMAP: czekam na NOWY kod MFA (timeout %ds, istniejących: %d) …",
-                     timeout_s, len(known_ids))
+                    known_count = _get_exists(imap)
+            log.info("IMAP: czekam na NOWY kod MFA (timeout %ds, wiadomości w INBOX: %d) …",
+                     timeout_s, known_count)
 
             while time.time() < deadline:
-                # Fresh connection each poll — ensures server shows newest emails
                 with imaplib.IMAP4_SSL(imap_host, 993) as imap:
                     imap.login(imap_user, imap_pass)
-                    imap.select("INBOX")
-                    status, msgs = imap.uid("search", None, search_criteria)
-                    if status == "OK" and msgs[0]:
-                        msg_uids = msgs[0].split()
-                        new_uids = [u for u in msg_uids if u not in known_ids]
-                        for uid in reversed(new_uids):
-                            _, msg_data = imap.uid("fetch", uid, "(RFC822)")
-                            if not msg_data or not msg_data[0]:
-                                continue
-                            raw = msg_data[0][1]
-                            msg = email_lib.message_from_bytes(raw)
-                            body = ""
-                            if msg.is_multipart():
-                                for part in msg.walk():
-                                    ct = part.get_content_type()
-                                    if ct in ("text/plain", "text/html"):
-                                        payload = part.get_payload(decode=True)
-                                        if payload:
-                                            body += payload.decode("utf-8", errors="replace")
-                            else:
-                                payload = msg.get_payload(decode=True)
-                                if payload:
-                                    body = payload.decode("utf-8", errors="replace")
-
-                            match = re.search(r'\b(\d{6})\b', body)
-                            if match and "weryfikacyjny" in body.lower():
-                                return match.group(1)
+                    current_count = _get_exists(imap)
+                    if current_count > known_count:
+                        log.info("IMAP: nowe wiadomości (%d → %d), sprawdzam…",
+                                 known_count, current_count)
+                        # Check all new messages (newest first)
+                        for seq in range(current_count, known_count, -1):
+                            code = _extract_code(imap, seq)
+                            if code:
+                                return code
+                        # No MFA code in new messages, update count
+                        known_count = current_count
                 time.sleep(poll_interval)
-
                 log.warning("IMAP: timeout — nie znaleziono kodu MFA.")
         except Exception as e:
             log.error("IMAP: błąd podczas pobierania kodu MFA: %s", e)
@@ -414,16 +419,13 @@ class MedicoverSession:
                 _imap_host = os.environ.get("IMAP_HOST", os.environ.get("SMTP_HOST", ""))
                 _imap_user = os.environ.get("SMTP_USER", "")
                 _imap_pass = os.environ.get("SMTP_PASS", "")
-                _yesterday = (date.today() - timedelta(days=1)).strftime("%d-%b-%Y")
-                _pre_ids = set()
+                _pre_count = 0
                 try:
                     with _imaplib.IMAP4_SSL(_imap_host, 993) as _im:
                         _im.login(_imap_user, _imap_pass)
-                        _im.select("INBOX")
-                        _st, _ms = _im.uid("search", None, f'(FROM "medicover" SINCE "{_yesterday}")')
-                        if _st == "OK" and _ms[0]:
-                            _pre_ids = set(_ms[0].split())
-                    log.info("[Auth 3.5/5] IMAP snapshot: %d istniejących emaili", len(_pre_ids))
+                        _st, _data = _im.select("INBOX")
+                        _pre_count = int(_data[0]) if _st == "OK" else 0
+                    log.info("[Auth 3.5/5] IMAP snapshot: %d wiadomości w INBOX", _pre_count)
                 except Exception as _e:
                     log.warning("[Auth 3.5/5] Nie udało się zrobić IMAP snapshot: %s", _e)
 
@@ -457,7 +459,7 @@ class MedicoverSession:
 
                 # Step 2: wait for code via IMAP
                 log.info("[Auth 3.5/5] MFA wymaga kodu — pobieram z IMAP …")
-                otp = self._fetch_mfa_code_from_imap(known_ids=_pre_ids)
+                otp = self._fetch_mfa_code_from_imap(known_count=_pre_count)
                 if not otp:
                     raise AuthError("Nie udało się pobrać kodu MFA z emaila w ciągu 120s.")
 
