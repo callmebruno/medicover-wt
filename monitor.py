@@ -207,15 +207,15 @@ class MedicoverSession:
         deadline = time.time() + timeout_s
         poll_interval = 5
 
+        search_criteria = f'(FROM "medicover" SINCE "{yesterday_str}")'
+
         try:
             # Use pre-captured known_ids if not provided, snapshot via fresh connection
             if known_ids is None:
                 with imaplib.IMAP4_SSL(imap_host, 993) as imap:
                     imap.login(imap_user, imap_pass)
                     imap.select("INBOX")
-                    status, msgs = imap.search(
-                        None, f'(FROM "medicover" SINCE "{yesterday_str}")',
-                    )
+                    status, msgs = imap.uid("search", None, search_criteria)
                     known_ids = set(msgs[0].split()) if status == "OK" and msgs[0] else set()
             log.info("IMAP: czekam na NOWY kod MFA (timeout %ds, istniejących: %d) …",
                      timeout_s, len(known_ids))
@@ -225,14 +225,12 @@ class MedicoverSession:
                 with imaplib.IMAP4_SSL(imap_host, 993) as imap:
                     imap.login(imap_user, imap_pass)
                     imap.select("INBOX")
-                    status, msgs = imap.search(
-                        None, f'(FROM "medicover" SINCE "{yesterday_str}")',
-                    )
+                    status, msgs = imap.uid("search", None, search_criteria)
                     if status == "OK" and msgs[0]:
-                        msg_ids = msgs[0].split()
-                        new_ids = [m for m in msg_ids if m not in known_ids]
-                        for mid in reversed(new_ids):
-                            _, msg_data = imap.fetch(mid, "(RFC822)")
+                        msg_uids = msgs[0].split()
+                        new_uids = [u for u in msg_uids if u not in known_ids]
+                        for uid in reversed(new_uids):
+                            _, msg_data = imap.uid("fetch", uid, "(RFC822)")
                             if not msg_data or not msg_data[0]:
                                 continue
                             raw = msg_data[0][1]
@@ -422,7 +420,7 @@ class MedicoverSession:
                     with _imaplib.IMAP4_SSL(_imap_host, 993) as _im:
                         _im.login(_imap_user, _imap_pass)
                         _im.select("INBOX")
-                        _st, _ms = _im.search(None, f'(FROM "medicover" SINCE "{_yesterday}")')
+                        _st, _ms = _im.uid("search", None, f'(FROM "medicover" SINCE "{_yesterday}")')
                         if _st == "OK" and _ms[0]:
                             _pre_ids = set(_ms[0].split())
                     log.info("[Auth 3.5/5] IMAP snapshot: %d istniejących emaili", len(_pre_ids))
