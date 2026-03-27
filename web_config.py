@@ -783,32 +783,23 @@ def api_repos():
 
 @app.get("/api/load")
 def api_load():
-    """Load config.yml — optionally from a specific remote's latest commit."""
-    remote = request.args.get("remote", "")
+    """Load config.yml from the selected remote's latest commit."""
+    remote = request.args.get("remote", "origin")
     cwd = os.path.dirname(os.path.abspath(__file__))
 
-    if remote and remote != "origin":
-        # Fetch latest from that remote and read its config.yml
-        try:
-            subprocess.run(["git", "fetch", remote, "main"], cwd=cwd,
-                           capture_output=True, text=True, timeout=15)
-            result = subprocess.run(
-                ["git", "show", f"{remote}/main:config.yml"],
-                cwd=cwd, capture_output=True, text=True, timeout=10
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                data = yaml.safe_load(result.stdout) or {}
-                return jsonify(data)
-        except Exception:
-            pass
-        return jsonify({})
-
-    config_path = os.path.join(cwd, "config.yml")
-    if not os.path.exists(config_path):
-        return jsonify({})
-    with open(config_path, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    return jsonify(data)
+    try:
+        subprocess.run(["git", "fetch", remote, "main"], cwd=cwd,
+                       capture_output=True, text=True, timeout=15)
+        result = subprocess.run(
+            ["git", "show", f"{remote}/main:config.yml"],
+            cwd=cwd, capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            data = yaml.safe_load(result.stdout) or {}
+            return jsonify(data)
+    except Exception:
+        pass
+    return jsonify({})
 
 
 @app.post("/api/save")
