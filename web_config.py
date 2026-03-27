@@ -139,6 +139,22 @@ HTML = r"""
 <body>
 <h1>Medicover Monitor — Konfigurator</h1>
 
+<!-- 0. Wybór konta / repo -->
+<div class="card">
+  <h2>0. Konto Medicover</h2>
+  <div class="row">
+    <div class="field">
+      <label>Repozytorium</label>
+      <select id="sel-repo" onchange="switchRepo()">
+      </select>
+    </div>
+    <div class="field">
+      <label>Status</label>
+      <div id="repo-status" style="padding-top:.4rem;font-size:.9rem;color:#718096;">—</div>
+    </div>
+  </div>
+</div>
+
 <!-- 1. Logowanie -->
 <div class="card">
   <h2>1. Logowanie do Medicover</h2>
@@ -260,6 +276,7 @@ const $ = id => document.getElementById(id);
 
 // ---- state ----
 let watches = [];
+let currentRepo = 'origin';
 
 // ---- helpers ----
 
@@ -488,20 +505,36 @@ async function saveConfig() {
 }
 
 async function gitPush() {
-  showSpinner('Wypycham do git…');
+  showSpinner(`Wypycham do ${currentRepo}…`);
   try {
-    const res = await api('POST', '/api/git-push');
-    showStatus('Git push: ' + res.output, 'ok');
+    const res = await api('POST', '/api/git-push', { remote: currentRepo });
+    showStatus(`Git push (${currentRepo}): ` + res.output, 'ok');
   } catch(e) {
     showStatus('Błąd git: ' + e.message, 'err');
   }
 }
 
-// ---- init: pre-load existing config ----
-
-document.addEventListener('DOMContentLoaded', async () => {
+async function loadRepos() {
   try {
-    const cfg = await api('GET', '/api/load');
+    const data = await api('GET', '/api/repos');
+    const sel = $('sel-repo');
+    sel.innerHTML = '';
+    for (const r of data.repos) {
+      const opt = document.createElement('option');
+      opt.value = r.name;
+      opt.textContent = `${r.label} (${r.name})`;
+      sel.appendChild(opt);
+    }
+    currentRepo = sel.value;
+    $('repo-status').textContent = `Aktywne: ${currentRepo}`;
+  } catch(e) { console.error(e); }
+}
+
+async function switchRepo() {
+  currentRepo = $('sel-repo').value;
+  $('repo-status').innerHTML = '<span class="spinner"></span>Ładuję config…';
+  try {
+    const cfg = await api('GET', `/api/load?remote=${currentRepo}`);
     if (cfg.EMAIL_TO)  $('email-to').value  = cfg.EMAIL_TO;
     if (cfg.SMTP_HOST) $('smtp-host').value = cfg.SMTP_HOST;
     if (cfg.SMTP_PORT) $('smtp-port').value = cfg.SMTP_PORT;
@@ -513,9 +546,24 @@ document.addEventListener('DOMContentLoaded', async () => {
         _clinicName: w.clinic_id > 0 ? `Placówka ${w.clinic_id}` : 'Dowolna placówka',
         _doctorName: w.doctor_id > 0 ? `Lekarz ${w.doctor_id}`  : 'Dowolny lekarz',
       }));
-      renderWatches();
+    } else {
+      watches = [];
     }
-  } catch(e) { /* config.yml może jeszcze nie istnieć */ }
+    renderWatches();
+    $('repo-status').textContent = `Aktywne: ${currentRepo}`;
+    showStatus(`Załadowano config z ${currentRepo}.`, 'ok');
+  } catch(e) {
+    $('repo-status').textContent = `Aktywne: ${currentRepo} (brak config)`;
+    watches = [];
+    renderWatches();
+  }
+}
+
+// ---- init: pre-load existing config ----
+
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadRepos();
+  await switchRepo();
 });
 </script>
 </body>
@@ -651,9 +699,49 @@ def api_doctors():
         return jsonify(error=str(e)), 500
 
 
+@app.get("/api/repos")
+def api_repos():
+    """List git remotes as repo choices."""
+    cwd = os.path.dirname(os.path.abspath(__file__))
+    result = subprocess.run(["git", "remote", "-v"], cwd=cwd,
+                            capture_output=True, text=True)
+    repos = []
+    seen = set()
+    for line in result.stdout.strip().splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] not in seen:
+            name = parts[0]
+            url = parts[1]
+            # Extract repo name from URL for label
+            label = url.rstrip("/").rsplit("/", 1)[-1].replace(".git", "")
+            repos.append({"name": name, "url": url, "label": label})
+            seen.add(name)
+    return jsonify(repos=repos)
+
+
 @app.get("/api/load")
 def api_load():
-    config_path = os.path.join(os.path.dirname(__file__), "config.yml")
+    """Load config.yml — optionally from a specific remote's latest commit."""
+    remote = request.args.get("remote", "")
+    cwd = os.path.dirname(os.path.abspath(__file__))
+
+    if remote and remote != "origin":
+        # Fetch latest from that remote and read its config.yml
+        try:
+            subprocess.run(["git", "fetch", remote, "main"], cwd=cwd,
+                           capture_output=True, text=True, timeout=15)
+            result = subprocess.run(
+                ["git", "show", f"{remote}/main:config.yml"],
+                cwd=cwd, capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                data = yaml.safe_load(result.stdout) or {}
+                return jsonify(data)
+        except Exception:
+            pass
+        return jsonify({})
+
+    config_path = os.path.join(cwd, "config.yml")
     if not os.path.exists(config_path):
         return jsonify({})
     with open(config_path, encoding="utf-8") as f:
@@ -681,6 +769,8 @@ def api_save():
 
 @app.post("/api/git-push")
 def api_git_push():
+    data = request.get_json(force=True) if request.is_json else {}
+    remote = data.get("remote", "origin")
     cwd = os.path.dirname(os.path.abspath(__file__))
     track_files = ["monitor.py", "web_config.py", "config.yml",
                    "requirements.txt", ".gitignore", ".github"]
@@ -707,14 +797,12 @@ def api_git_push():
         if result.returncode != 0 and not nothing:
             raise RuntimeError(out.strip())
 
-        # Sync with remote, then push
-        subprocess.run(
-            ["git", "pull", "--rebase"], cwd=cwd, check=True, capture_output=True, text=True
-        )
+        # Push to selected remote
         push = subprocess.run(
-            ["git", "push"], cwd=cwd, check=True, capture_output=True, text=True
+            ["git", "push", remote, "main"],
+            cwd=cwd, check=True, capture_output=True, text=True
         )
-        push_out = push.stdout or push.stderr or "Wypchnięto pomyślnie."
+        push_out = push.stdout or push.stderr or f"Wypchnięto do {remote} pomyślnie."
         return jsonify(ok=True, output=push_out)
     except subprocess.CalledProcessError as e:
         return jsonify(error=(e.stderr or e.stdout or str(e))), 500
