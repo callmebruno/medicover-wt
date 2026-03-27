@@ -1120,15 +1120,12 @@ def _save_notified(new_keys: set) -> None:
 
 
 def _git_push_state() -> None:
-    """Commit and push notified.json + session.json back to the repo (GitHub Actions only)."""
+    """Commit and push notified.json back to the repo (GitHub Actions only)."""
     import subprocess
     if not os.environ.get("GITHUB_ACTIONS"):
         return
     try:
-        files = [NOTIFIED_FILE]
-        if os.path.exists(SESSION_FILE):
-            files.append(SESSION_FILE)
-        subprocess.run(["git", "add"] + files, check=True)
+        subprocess.run(["git", "add", NOTIFIED_FILE], check=True)
         diff = subprocess.run(["git", "diff", "--cached", "--quiet"])
         if diff.returncode == 0:
             log.info("Brak zmian w plikach stanu — pomijam commit.")
