@@ -1,12 +1,12 @@
-EMAIL_TO: wtrela4@gmail.com
+EMAIL_TO: trelakrystian@gmail.com
 SMTP_HOST: poczta.interia.pl
 SMTP_PORT: 465
 watches:
-- name: USG tarczycy – Kielce
-  region_id: 109674
-  specialization_id: 517
-  clinic_id: -1
-  doctor_id: -1
+- name: Stomatolog – Kraków
+  region_id: 202
+  specialization_id: 28
+  clinic_id: 59886
+  doctor_id: 333458
   booking_type: 1
-  days_ahead: 30
-  email_to: wtrela4@gmail.com
+  days_ahead: 60
+  email_to: p.iwonastolarz@gmail.com
