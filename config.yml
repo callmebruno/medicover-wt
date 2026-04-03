@@ -2,15 +2,7 @@ EMAIL_TO: wtrela4@gmail.com
 SMTP_HOST: poczta.interia.pl
 SMTP_PORT: 465
 watches:
-- name: USG tarczycy â€“ Kielce
-  region_id: 109674
-  specialization_id: 517
-  clinic_id: -1
-  doctor_id: -1
-  booking_type: 1
-  days_ahead: 30
-  email_to: wtrela4@gmail.com
-- name: Endokrynolog dorośli – Kielce
+- name: Endokrynolog doroĹ›li â€“ Kielce
   region_id: 109674
   specialization_id: 5
   clinic_id: 71814
