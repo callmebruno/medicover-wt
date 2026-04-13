@@ -519,8 +519,28 @@ async function saveConfig() {
 }
 
 async function gitPush() {
-  showSpinner(`Wypycham do ${currentRepo}…`);
+  if (!watches.length) { showStatus('Dodaj przynajmniej jedną czujkę.', 'err'); return; }
+  // Always save current UI state before pushing — prevents pushing wrong config to wrong repo
+  showSpinner(`Zapisuję i wypycham do ${currentRepo}…`);
   try {
+    const cfg = {
+      EMAIL_TO:  $('email-to').value,
+      SMTP_HOST: $('smtp-host').value,
+      SMTP_PORT: parseInt($('smtp-port').value) || 465,
+      watches: watches.map(w => ({
+        name:              w.name,
+        region_id:         w.region_id,
+        specialization_id: w.specialization_id,
+        clinic_id:         w.clinic_id,
+        doctor_id:         w.doctor_id,
+        booking_type:      w.booking_type,
+        days_ahead:        w.days_ahead,
+        ...(w.time_from     ? {time_from:     w.time_from}     : {}),
+        ...(w.time_to       ? {time_to:       w.time_to}       : {}),
+        ...(w.email_to      ? {email_to:      w.email_to}      : {}),
+      })),
+    };
+    await api('POST', '/api/save', cfg);
     const res = await api('POST', '/api/git-push', { remote: currentRepo });
     showStatus(`Git push (${currentRepo}): ` + res.output, 'ok');
   } catch(e) {
