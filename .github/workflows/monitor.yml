@@ -2,8 +2,7 @@ name: Medicover Monitor
 
 on:
   schedule:
-    - cron: '0 4,8,12,16,20 * * *'  # Co 4h: 04:00, 08:00, 12:00, 16:00, 20:00 UTC
-  workflow_dispatch:
+    - cron: '0 0 31 2 *'  # Uruchomi się o północy 31 lutego (czyli nigdy)  workflow_dispatch:
     # Umożliwia ręczne uruchomienie z poziomu zakładki Actions
 
 jobs:
